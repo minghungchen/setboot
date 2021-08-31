@@ -14,20 +14,21 @@
 - copy setboot and setboot.py to /usr/local/sbin (or other places you preferred)
 
 # Usage
+- setboot will not actually do anything before you confirm the GRUB_CMDLINE_LINUX_DEFAULT option. It is safe to press ctrl-c to interrupt anytime before that.
 - For the system with single boot drive:
     - Simply run setboot
 
 - For the system with multiple boot drives:
     - Method 1:
-        1. Locate the boot drive the BIOS will use, e.g., /dev/sdb2
+        1. Locate the boot device the BIOS will use, e.g., /dev/sdb2, assuming that /boot and /etc are all in this device
         2. Run setboot /dev/sdb2
     - Method 2:
-        1. Locate the boot drive the BIOS will use, assuming that /boot and /etc are all in this drive
-        2. Mount the drive, e.g., /tmp/bootDev
+        1. Locate the boot device the BIOS will use, assuming that /boot and /etc are all in this device
+        2. Mount the device, e.g., /tmp/bootDev
         2. Run setboot /tmp/bootDev/boot/grub.conf /tmp/bootDev/etc/default/grub
     - Method 3:
-        1. Locate the boot drive the BIOS will use, and the root drive if it is differerent
-        2. Mount the drives, e.g., /tmp/bootDev and /tmp/rootDev
+        1. Locate the boot device the BIOS will use, and the root device if it is differerent
+        2. Mount the devices, e.g., /tmp/bootDev and /tmp/rootDev
         2. Run setboot /tmp/bootDev/boot/grub.conf /tmp/rootDev/etc/default/grub
 
 # Advanced usage
