@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+SELF=`realpath -s $0`
+sPATH=`dirname $SELF`
+which python3 > /dev/null 2>&1
+if [ $? != 0 ]
+then
+  which python > /dev/null 2>&1
+  if [ $? != 0 ]
+  then
+    echo "Unable to locate python3 or python. Please make sure python is installed."
+  else
+    exec python $sPATH/setboot.py "$@"
+  fi
+else
+  exec python3 $sPATH/setboot.py "$@"
+fi
