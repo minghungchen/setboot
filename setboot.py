@@ -11,31 +11,36 @@ tmpMountPath = "/tmp/tmpBootDev"
 tmpGrubBootFile = "/tmp/tmpGrubBootFile"
 tmpEnvFile = "/tmp/tmpGrubEnvFile"
 
+devDiskUUIDPath = "/dev/disk/by-uuid"
+
 # deal with Python 2.x
 if hasattr(__builtins__, 'raw_input'):
       input=raw_input
 
 def showInfo():
     print("--------------------------------------------")
-    print("GRUB Boot Menu Configuration Tool. 2021/8/31")
+    print("GRUB Boot Menu Configuration Tool. 2021/9/10")
     print("Please report issues to GitHub repo at:")
     print("https://github.com/minghungchen/setboot")
     print("--------------------------------------------")
 
 def interruptSignalHandler(sig, frame):
-    cmd = "sudo rm " + tmpGrubBootFile
-    ret = os.system(cmd)
-    if ret != 0:
-        print("Failed to clean up temp file: %s but harmless" % tmpGrubBootFile)
-    cmd = "sudo rm " + tmpEnvFile
-    ret = os.system(cmd)
-    if ret != 0:
-        print("Failed to clean up temp file: %s but harmless" % tmpEnvFile)
-    if os.path.isdir(tmpMountPath):
-        cmd = "sudo umount " + tmpMountPath
+    if os.path.isfile(tmpGrubBootFile):
+        cmd = "sudo rm " + tmpGrubBootFile
         ret = os.system(cmd)
         if ret != 0:
-            print("Failed to unmount temp directory: %s but harmless" % tmpMountPath)
+            print("Failed to clean up temp file: %s but harmless" % tmpGrubBootFile)
+    if os.path.isfile(tmpEnvFile):
+        cmd = "sudo rm " + tmpEnvFile
+        ret = os.system(cmd)
+        if ret != 0:
+            print("Failed to clean up temp file: %s but harmless" % tmpEnvFile)
+    if os.path.isdir(tmpMountPath):
+        if os.path.ismount(tmpMountPath):
+            cmd = "sudo umount " + tmpMountPath
+            ret = os.system(cmd)
+            if ret != 0:
+                print("Failed to unmount temp directory: %s but harmless" % tmpMountPath)
         cmd = "sudo rmdir " + tmpMountPath
         ret = os.system(cmd)
         if ret != 0:
@@ -63,7 +68,7 @@ def updateBootFile(grubBootFile, grubEnvFile):
         ret = os.system(cmd)
         if ret != 0:
             sys.exit("Failed to copy %s to %s. Please verify the %s and its backup %s are good."% (grubEnvFile,defaultGrubEnvFile,defaultGrubEnvFile,bakGrubEnvFile) )
-    cmd = "sudo grub-mkconfig -o " + grubBootFile
+    cmd = "sudo grub-mkconfig -o " + grubBootFile + " > /dev/null 2>&1"
     ret = os.system(cmd)
     if ret != 0:
         sys.exit("Failed to generating a temporarily grub boot file for reference. Please check the output above.")
@@ -293,12 +298,94 @@ def patchEnvFile(envFile, tmpEnvFile, grubPath, grubTimeout, grubTimeoutStyle, g
    
     return 0
 
+def detectGrubDevice(tmpMount,grubBootFile,targetDev):
+    knownDevNames = []
+    diskUUIDList=[uuid for uuid in os.listdir(devDiskUUIDPath) if os.path.islink(os.path.join(devDiskUUIDPath, uuid))]
+    devNameUUIDMap={}
+    UUIDdevNameMap={}
+    grubUUIDBootFileMap = {}
+
+    cmd = ["blkid"]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE)
+    lines = result.stdout.decode().split('\n')
+    for line in lines:
+        items = line.split(' ')
+        if len(items) < 2:
+            break
+        devName = items[0][:-1]
+        devUUID = items[1][5:].strip('"')
+        devNameUUIDMap[devName]=devUUID
+        UUIDdevNameMap[devUUID] = devName
+    # check for root and boot if no tmpMount
+    if grubBootFile == defaultGrubBootFile:
+        cmd = ["findmnt", "-n", "--raw", "--evaluate", "--output=source", "/"]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE)
+        if result.returncode == 0:
+            knownDevNames.append(result.stdout.decode().rstrip())
+        cmd = ["findmnt", "-n", "--raw", "--evaluate", "--output=source", "/boot"]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE)
+        if result.returncode == 0:
+            knownDevNames.append(result.stdout.decode().rstrip())
+    elif tmpMount != 0 and targetDev.startswith('/dev/'):
+        knownDevNames.append(targetDev)
+    else:
+        print("The supplied grub boot setting is a file. The device may not be excluded from the list but harmless.")
+    # remove known devices by dev name
+    for dev in knownDevNames:
+        if dev in devNameUUIDMap:
+            diskUUIDList.remove(devNameUUIDMap[dev])
+    # prepare the tmp mount point
+    if tmpMount == 0:
+        cmd = "sudo mkdir -p " + tmpMountPath
+        ret = os.system(cmd)
+        if ret != 0:
+            sys.exit("Failed to create temporarily mount point.")
+    elif os.path.ismount(tmpMountPath):
+        cmd = "sudo umount " + tmpMountPath
+        ret = os.system(cmd)
+        if ret != 0:
+            print("Failed to unmount temp directory: %s but harmless" % tmpMountPath)
+    # look for grub boot config file in the rest of devices
+    for uuid in diskUUIDList:
+        cmd = "sudo mount " + os.path.join(devDiskUUIDPath,uuid) + " " + tmpMountPath
+        ret = os.system(cmd)
+        if ret != 0:
+            sys.exit("Failed to mount target device.")
+        grubBootFile = tmpMountPath + "/grub/grub.cfg"
+        grubBootFileAlt = tmpMountPath + "/boot/grub/grub.cfg"
+        if os.path.isfile(grubBootFile):
+            grubUUIDBootFileMap[uuid] = "/grub/grub.cfg"
+        elif os.path.isfile(grubBootFileAlt):
+            grubUUIDBootFileMap[uuid] = "/boot/grub/grub.cfg"
+        cmd = "sudo umount " + tmpMountPath
+        ret = os.system(cmd)
+        if ret != 0:
+            print("Failed to unmount temp directory: %s but harmless" % tmpMountPath)
+    return grubUUIDBootFileMap, UUIDdevNameMap
+
 def main(grubBootFile, grubEnvFile):
     tmpMount = 0
+    targetDev = ""
     showInfo()
     signal.signal(signal.SIGINT, interruptSignalHandler)
     if verifyRootPermissionAndCacheSudo() != 0:
         sys.exit("You must have root permission to use this tool. Please run with account having sudo permission or the root account.")
+
+    # verify grub-mkconfig, findmnt, blkid
+    print("Checking dependencies...")
+    cmd = "which grub-mkconfig" + " > /dev/null 2>&1"
+    ret = os.system(cmd)
+    if ret != 0:
+        sys.exit("The required dependency grub-mkconfig was not found in the system.")
+    cmd = "which findmnt" + " > /dev/null 2>&1"
+    ret = os.system(cmd)
+    if ret != 0:
+        sys.exit("The required dependency findmnt was not found in the system.")
+    cmd = "which blkid" + " > /dev/null 2>&1"
+    ret = os.system(cmd)
+    if ret != 0:
+        sys.exit("The required dependency blkid was not found in the system.")
+    
     if grubBootFile.startswith('/dev/'):
         tmpMount = 1
         targetDev = grubBootFile
@@ -306,6 +393,11 @@ def main(grubBootFile, grubEnvFile):
         ret = os.system(cmd)
         if ret != 0:
             sys.exit("Failed to create temporarily mount point.")
+        if os.path.ismount(tmpMountPath):
+            cmd = "sudo umount " + tmpMountPath
+            ret = os.system(cmd)
+            if ret != 0:
+                print("Failed to unmount temp directory: %s but harmless" % tmpMountPath)
         cmd = "sudo mount " + grubBootFile + " " + tmpMountPath
         ret = os.system(cmd)
         if ret != 0:
@@ -333,12 +425,7 @@ def main(grubBootFile, grubEnvFile):
     print("Use grub files: Boot: %s, Env: %s" % (grubBootFile, grubEnvFile))
     print("Stage 1: Parse grub default environment setting file: %s" % grubEnvFile)
     curGrubPath, curGrubTimeout, curGrubTimeoutStyle, curGrubCmdLines = parseEnvFile(grubEnvFile)
-    print("Stage 2: Generate and parse temporarily grub config")
-    # verify grub-mkconfig
-    cmd = "which grub-mkconfig"
-    ret = os.system(cmd)
-    if ret != 0:
-        sys.exit("The required dependency grub-mkconfig was not found in the system.")
+    print("Stage 2: Generate and parse temporarily grub config. Please wait for a while...")
     # generate a bootfile for parsing
     updateBootFile(tmpGrubBootFile, grubEnvFile)
     # parse for the menu entries
@@ -349,7 +436,31 @@ def main(grubBootFile, grubEnvFile):
     ret = patchEnvFile(grubEnvFile, tmpEnvFile, grubPath, grubTimeout, grubTimeoutStyle, grubGrubCmdLine, curGrubCmdLines)
     print("Stage 5: Generate the new grub configuration file")
     updateBootFile(grubBootFile, grubEnvFile)
-    print("On the next reboot, the default kernel will be: %s with CMDLINE: %s\n" % (grubString, grubGrubCmdLine))
+    print("Stage 6: Detect and generate the new grub configuration file for other boot drives")
+    cmd = "sudo cp " + grubEnvFile + " /tmp/"
+    ret = os.system(cmd)
+    if ret != 0:
+        sys.exit("Failed to create backup environment setting file in temporarily directory.")
+    grubUUIDBootFileMap, UUIDdevNameMap = detectGrubDevice(tmpMount, grubBootFile, targetDev)
+    if len(grubUUIDBootFileMap) > 0:
+        print("\nThe following alternative grub boot configuration files are detected:")
+        for uuid,grubFileLocation in grubUUIDBootFileMap.items():
+            print("%s: UUID=%s at %s" % (UUIDdevNameMap[uuid], uuid, grubFileLocation))
+        confirm = input("Do you want to update those grub boot configuration files [Y]: ")
+        if confirm.lower() == "y":
+            for uuid,grubFileLocation in grubUUIDBootFileMap.items():
+                print("Updating %s%s..." % (os.path.join(devDiskUUIDPath,uuid), grubFileLocation))
+                cmd = "sudo mount " + os.path.join(devDiskUUIDPath,uuid) + " " + tmpMountPath
+                ret = os.system(cmd)
+                if ret != 0:
+                    sys.exit("Failed to mount target device.")
+                grubBootFile = tmpMountPath + grubFileLocation
+                updateBootFile(grubBootFile, tmpEnvFile)
+                cmd = "sudo umount " + tmpMountPath
+                ret = os.system(cmd)
+                if ret != 0:
+                    print("Failed to unmount temp directory: %s but harmless" % tmpMountPath)
+    print("\nOn the next reboot, the default kernel will be: %s with CMDLINE: %s" % (grubString, grubGrubCmdLine))
     # clean up
     cmd = "sudo rm " + tmpGrubBootFile
     ret = os.system(cmd)
@@ -359,11 +470,12 @@ def main(grubBootFile, grubEnvFile):
     ret = os.system(cmd)
     if ret != 0:
         print("Failed to clean up temp file: %s but harmless" % tmpEnvFile)
-    if tmpMount != 0:
-        cmd = "sudo umount " + tmpMountPath
-        ret = os.system(cmd)
-        if ret != 0:
-            print("Failed to unmount temp directory: %s but harmless" % tmpMountPath)
+    if os.path.exists(tmpMountPath):
+        if os.path.ismount(tmpMountPath):
+            cmd = "sudo umount " + tmpMountPath
+            ret = os.system(cmd)
+            if ret != 0:
+                print("Failed to unmount temp directory: %s but harmless" % tmpMountPath)
         cmd = "sudo rmdir " + tmpMountPath
         ret = os.system(cmd)        
         if ret != 0:
@@ -378,7 +490,7 @@ if __name__ == '__main__':
         defaultGrubBootFile = sys.argv[1]
         defaultGrubEnvFile = sys.argv[2]
         print("Override the default grub files: Boot: %s, Env: %s" % (defaultGrubBootFile, defaultGrubEnvFile))
-    if not defaultGrubBootFile.startswith("/dev/") and not os.path.isfile(defaultGrubBootFile) or not os.path.isfile(defaultGrubEnvFile):
+    if not defaultGrubBootFile.startswith("/dev/") and (not os.path.isfile(defaultGrubBootFile) or not os.path.isfile(defaultGrubEnvFile)):
         sys.stderr.write("Unable to detect the grub setting files: {} {}\n".format(defaultGrubBootFile, defaultGrubEnvFile))
         sys.stderr.write("USAGE: {} <GrubBootSettingFile or BootDevPath> <GrubDefaultEnvironmentSettingFile>\n".format(sys.argv[0]))
         sys.exit(1)
