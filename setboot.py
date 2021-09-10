@@ -159,6 +159,7 @@ def selectMenuItem(grubMenu, curGrubPath, curGrubTimeout, curGrubTimeoutStyle, c
     menuPathStr = ""
     entryStr = ""
     entryPathStr = ""
+    currItemIdex = -1
     grubStrs = ['dummy']
     grubPaths = ['dummy']
     curPathStr = curGrubPath.strip('"')
@@ -182,51 +183,66 @@ def selectMenuItem(grubMenu, curGrubPath, curGrubTimeout, curGrubTimeoutStyle, c
                 entryPathStr = menuPathStr + ">" + grubMenu[curIndex+4]
                 if entryPathStr == curPathStr:
                     print("|- [%d] %s  <= Current setting" % (itemCount, entryStr))
+                    currItemIdex = itemCount
                 else:
                     print("|- [%d] %s" % (itemCount, entryStr))
             grubStrs.append(entryStr)
             grubPaths.append(entryPathStr)
     while True:
-        inputData = input("Please select the index of the boot item: ")
+        if currItemIdex != -1:
+            inputData = input("Please select the index of the boot item [" + str(currItemIdex) + "]: ")
+        else:
+            inputData = input("Please select the index of the boot item: ")
         intVal=0
         try:
             intVal = int(inputData)
         except ValueError:
-            print("The selected index is invalid\n")
-            continue
+            if inputData == "" and currItemIdex != -1:
+                intVal = currItemIdex
+            else:
+                print("The selected index is invalid\n")
+                continue
         if intVal < 1 or intVal > itemCount:
             print("The selected index is invalid\n")
             continue
         confirm = input("Please enter Y to confirm the next boot will be: %s [Y]: " % grubStrs[intVal])
-        if confirm.lower() == "y":
+        if confirm.lower() == "y" or confirm == "":
             grubPath=grubPaths[intVal]
             grubString=grubStrs[intVal]
             break
     
     print ("\nAvailable GRUB_CMDLINE_LINUX_DEFAULT settings:")
     cmdIndex = 0
+    currItemIdex = -1
     for curCmdStr in curGrubCmdLines:
         cmdIndex+=1
         if cmdIndex == 1:
             print("[%d] %s  <= Current setting" % (cmdIndex, curCmdStr.strip("\"")))
+            currItemIdex = cmdIndex
         else:
             print("[%d] %s" % (cmdIndex, curCmdStr.strip("\"")))
     cmdIndex+=1
     print("[%d] Input a new GRUB_CMDLINE_LINUX_DEFAULT string" % cmdIndex)
     while True:
-        inputData = input("Please select the index of the CMDLINE string: ")
+        if currItemIdex != -1:
+            inputData = input("Please select the index of the CMDLINE string [" + str(currItemIdex) + "]: ")
+        else:
+            inputData = input("Please select the index of the CMDLINE string: ")
         intVal=0
         try:
             intVal = int(inputData)
         except ValueError:
-            print("The selected index is invalid\n")
-            continue
+            if inputData == "" and currItemIdex != -1:
+                intVal = currItemIdex
+            else:
+                print("The selected index is invalid\n")
+                continue
         if intVal < 1 or intVal > cmdIndex:
             print("The selected index is invalid\n")
             continue
         if intVal != cmdIndex:
             confirm = input("Please enter Y to confirm the CMDLINE will be: %s [Y]: " % curGrubCmdLines[intVal-1])
-            if confirm.lower() == "y":
+            if confirm.lower() == "y" or confirm == "":
                 grubGrubCmdLine = curGrubCmdLines[intVal-1]
                 break
         else:
@@ -235,7 +251,7 @@ def selectMenuItem(grubMenu, curGrubPath, curGrubTimeout, curGrubTimeoutStyle, c
             newCmdLineStr = newCmdLineStr.strip("'\"")
             newCmdLineStr = '"' + newCmdLineStr + '"'
             confirm = input("Please enter Y to confirm the CMDLINE will be: %s [Y]: " % newCmdLineStr)
-            if confirm.lower() == "y":
+            if confirm.lower() == "y" or confirm == "":
                 grubGrubCmdLine = newCmdLineStr
                 break
 
@@ -447,7 +463,7 @@ def main(grubBootFile, grubEnvFile):
         for uuid,grubFileLocation in grubUUIDBootFileMap.items():
             print("%s: UUID=%s at %s" % (UUIDdevNameMap[uuid], uuid, grubFileLocation))
         confirm = input("Do you want to update those grub boot configuration files [Y]: ")
-        if confirm.lower() == "y":
+        if confirm.lower() == "y" or confirm == "":
             for uuid,grubFileLocation in grubUUIDBootFileMap.items():
                 print("Updating %s%s..." % (os.path.join(devDiskUUIDPath,uuid), grubFileLocation))
                 cmd = "sudo mount " + os.path.join(devDiskUUIDPath,uuid) + " " + tmpMountPath
