@@ -4,12 +4,17 @@ import os
 import subprocess
 import time
 
-defaultGrubBootFile = "/boot/grub/grub.cfg"
-defaultGrubEnvFile = "/etc/default/grub"
+# this parameter defines the minimal grub timeout. suggested value: 10 seconds
+minGrubTimeout = 10
+# this parameter defines if to verify the grub timeout style is menu. suggested value: True
+useGrubMenu = True
 
 tmpMountPath = "/tmp/tmpBootDev"
 tmpGrubBootFile = "/tmp/tmpGrubBootFile"
 tmpEnvFile = "/tmp/tmpGrubEnvFile"
+
+defaultGrubBootFile = "/boot/grub/grub.cfg"
+defaultGrubEnvFile = "/etc/default/grub"
 
 devDiskUUIDPath = "/dev/disk/by-uuid"
 
@@ -19,7 +24,7 @@ if hasattr(__builtins__, 'raw_input'):
 
 def showInfo():
     print("--------------------------------------------")
-    print("GRUB Boot Menu Configuration Tool. 2021/9/10")
+    print("GRUB Boot Menu Configuration Tool. 2021/10/13 R1")
     print("Please report issues to GitHub repo at:")
     print("https://github.com/minghungchen/setboot")
     print("--------------------------------------------")
@@ -71,7 +76,7 @@ def updateBootFile(grubBootFile, grubEnvFile):
     cmd = "sudo grub-mkconfig -o " + grubBootFile + " > /dev/null 2>&1"
     ret = os.system(cmd)
     if ret != 0:
-        sys.exit("Failed to generating a temporarily grub boot file for reference. Please check the output above.")
+        sys.exit("Failed to generating a temporarily grub boot file with grub-mkconfig.")
     if grubEnvFile != defaultGrubEnvFile:
         cmd = "sudo rm " + defaultGrubEnvFile
         ret = os.system(cmd)
@@ -255,17 +260,18 @@ def selectMenuItem(grubMenu, curGrubPath, curGrubTimeout, curGrubTimeoutStyle, c
                 grubGrubCmdLine = newCmdLineStr
                 break
 
-    if curGrubTimeout < 10:
-        confirm = input("\n[WARN] Small GRUB_TIMEOUT value %d detected. It will be increase to 10. Enter \"No\" to keep it: " % curGrubTimeout)
+    if curGrubTimeout < minGrubTimeout:
+        confirm = input("\n[WARN] Small GRUB_TIMEOUT value %d detected. It will be increase to %d. Enter \"No\" to keep it: " % (curGrubTimeout,minGrubTimeout))
         if confirm.lower() != "no":
-            curGrubTimeout = 10
-            print("Update GRUB_TIMEOUT to 10")
+            curGrubTimeout = minGrubTimeout
+            print("Update GRUB_TIMEOUT to %d" % minGrubTimeout)
 
-    if curGrubTimeoutStyle != "menu":
-        confirm = input("\n[WARN] GRUB_TIMEOUT_STYLE value %s detected. It will be changed to menu. Enter \"No\" to keep it: " % curGrubTimeoutStyle)
-        if confirm.lower() != "no":
-            curGrubTimeoutStyle = "menu"
-            print("Update GRUB_TIMEOUT_STYLE to menu")
+    if useGrubMenu:
+        if curGrubTimeoutStyle != "menu":
+            confirm = input("\n[WARN] GRUB_TIMEOUT_STYLE value %s detected. It will be changed to menu. Enter \"No\" to keep it: " % curGrubTimeoutStyle)
+            if confirm.lower() != "no":
+                curGrubTimeoutStyle = "menu"
+                print("Update GRUB_TIMEOUT_STYLE to menu")
     
     return grubPath, curGrubTimeout, curGrubTimeoutStyle, grubGrubCmdLine, grubString
 
@@ -321,7 +327,7 @@ def detectGrubDevice(tmpMount,grubBootFile,targetDev):
     UUIDdevNameMap={}
     grubUUIDBootFileMap = {}
 
-    cmd = ["blkid"]
+    cmd = ["sudo","blkid"]
     result = subprocess.run(cmd, stdout=subprocess.PIPE)
     lines = result.stdout.decode().split('\n')
     for line in lines:
@@ -329,9 +335,22 @@ def detectGrubDevice(tmpMount,grubBootFile,targetDev):
         if len(items) < 2:
             break
         devName = items[0][:-1]
-        devUUID = items[1][5:].strip('"')
-        devNameUUIDMap[devName]=devUUID
-        UUIDdevNameMap[devUUID] = devName
+        items=items[1:]
+        devSkip = False
+        devUUID = ""
+        devType = ""
+        for item in items:
+          entries = item.split('=')
+          if entries[0] == "UUID":
+            devUUID = entries[1].strip('"')
+          elif entries[0] == "TYPE":
+            devType = entries[1].strip('"')
+            # this is to exclude common flash drives, installation media, and swap partitions
+            if devType == "iso9660" or devType == "vfat" or devType == "swap":
+              devSkip = True
+        if devSkip == False and devUUID != "":
+          devNameUUIDMap[devName] = devUUID
+          UUIDdevNameMap[devUUID] = devName
     # check for root and boot if no tmpMount
     if grubBootFile == defaultGrubBootFile:
         cmd = ["findmnt", "-n", "--raw", "--evaluate", "--output=source", "/"]
@@ -366,7 +385,8 @@ def detectGrubDevice(tmpMount,grubBootFile,targetDev):
         cmd = "sudo mount " + os.path.join(devDiskUUIDPath,uuid) + " " + tmpMountPath
         ret = os.system(cmd)
         if ret != 0:
-            sys.exit("Failed to mount target device.")
+            print("Failed to mount target device. Skip device: %s" % os.path.join(devDiskUUIDPath,uuid))
+            continue
         grubBootFile = tmpMountPath + "/grub/grub.cfg"
         grubBootFileAlt = tmpMountPath + "/boot/grub/grub.cfg"
         if os.path.isfile(grubBootFile):
@@ -500,7 +520,10 @@ def main(grubBootFile, grubEnvFile):
 
 if __name__ == '__main__':
     if len(sys.argv) == 2:
-        defaultGrubBootFile = sys.argv[1]
+        if sys.argv[1].endswith(".conf") or sys.argv[1].startswith("/dev/"):
+            defaultGrubBootFile = sys.argv[1]
+        else:
+            defaultGrubEnvFile = sys.argv[1]
         print("Override the default grub files: Boot: %s, Env: %s" % (defaultGrubBootFile, defaultGrubEnvFile))
     if len(sys.argv) == 3:
         defaultGrubBootFile = sys.argv[1]
@@ -508,7 +531,8 @@ if __name__ == '__main__':
         print("Override the default grub files: Boot: %s, Env: %s" % (defaultGrubBootFile, defaultGrubEnvFile))
     if not defaultGrubBootFile.startswith("/dev/") and (not os.path.isfile(defaultGrubBootFile) or not os.path.isfile(defaultGrubEnvFile)):
         sys.stderr.write("Unable to detect the grub setting files: {} {}\n".format(defaultGrubBootFile, defaultGrubEnvFile))
-        sys.stderr.write("USAGE: {} <GrubBootSettingFile or BootDevPath> <GrubDefaultEnvironmentSettingFile>\n".format(sys.argv[0]))
+        sys.stderr.write("USAGE: {} <GrubBootSettingFile or BootDevPath or GrubDefaultEnvironmentSettingFile> <GrubDefaultEnvironmentSettingFile>\n".format(sys.argv[0]))
         sys.exit(1)
     main(defaultGrubBootFile, defaultGrubEnvFile)
+
 
