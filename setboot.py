@@ -348,6 +348,9 @@ def detectGrubDevice(tmpMount,grubBootFile,targetDev):
             # this is to exclude common flash drives, installation media, and swap partitions
             if devType == "iso9660" or devType == "vfat" or devType == "swap":
               devSkip = True
+              if devUUID != "":
+                diskUUIDList.remove(devUUID)
+              continue
         if devSkip == False and devUUID != "":
           devNameUUIDMap[devName] = devUUID
           UUIDdevNameMap[devUUID] = devName
