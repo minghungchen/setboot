@@ -1,18 +1,19 @@
 # setboot
 - A tiny tool for configuring the GRUB menu in Ubuntu systems
-- Tested with Ubuntu 18.04 and 20.04, Legacy and UEFI mode
+- Support Ubuntu 18.04, 20.04, and 22.04, with both Legacy and UEFI mode
+- RHEL experimental support, based on 9.2
 - Theoretically this tool also works with other Linux distribution running GRUB, but you may want to change the location of default grub environment file (`defaultGrubEnvFile`) in setboot.py to make it work without extra parameters
 
 # Prerequirement
-- GRUB
-- grub-mkconfig (should come with Ubuntu)
+- GRUB (grub-mkconfig, which should come with Ubuntu/RHEL)
 - python 2.x or 3.x
+- blkid and findmnt, which should come with Ubuntu/RHEL
 - An account with sudo permission for installing and running this tool
 
 # Installation
 - clone this repo or download setboot and setboot.py
-- chmod 755 setboot and setboot.py
-- copy setboot and setboot.py to `/usr/local/sbin` for everyone to use (or other places you preferred)
+- chmod 755 setboot and setboot.py if they are not executable.
+- (optional) copy setboot and setboot.py to `/usr/local/sbin` for everyone to use (or other places you preferred)
 
 # Usage
 - setboot will not actually do anything before you confirm the GRUB_CMDLINE_LINUX_DEFAULT option. It is safe to press ctrl-c to interrupt anytime before that.
@@ -41,6 +42,9 @@
     - e.g., `setboot /home/mhchen/dryrun/grub.conf /home/mhchen/dryrun/grub`
 
 # Known issues
+- For dual-boot systems, setboot relies on os-probe to detect alternative boot options on other drives, but os-probe is default to disabled on some distributions
+    - If you have security concerns on os-probe but need dual-boot, please consider to use EFI based boot manager for dual-boot management and you can continue to use setboot for managing grub config
+    - If you need to manage dual-boot with grub and setboot, please manually add GRUB_DISABLE_OS_PROBER=false to /etc/default/grub
 - Does not be able to detect the drive for booting the current system (please let me know if you know how to figure it out)
 - The sequence of boot ment items could be changed or incorrect when switching among OS on different devices
 - The backup grub environment files will not be automatically removed

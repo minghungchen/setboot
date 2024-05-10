@@ -3,18 +3,28 @@ import sys
 import os
 import subprocess
 import time
+import distro
 
 # this parameter defines the minimal grub timeout. suggested value: 10 seconds
 minGrubTimeout = 10
 # this parameter defines if to verify the grub timeout style is menu. suggested value: True
 useGrubMenu = True
 
+# OS-dependent parameters. Updated according to detected OS, but remain the same if OS distribution is not recognized
+grubMkCfg = "grub-mkconfig"
+defaultGrubBootFile = "/boot/grub/grub.cfg"
+defaultAltGrubBootFile = "/grub/grub.cfg"
+defaultGrubEnvFile = "/etc/default/grub"
+
 tmpMountPath = "/tmp/tmpBootDev"
 tmpGrubBootFile = "/tmp/tmpGrubBootFile"
 tmpEnvFile = "/tmp/tmpGrubEnvFile"
 
-defaultGrubBootFile = "/boot/grub/grub.cfg"
-defaultGrubEnvFile = "/etc/default/grub"
+# OSPROBER is 1 only when GRUB_DISABLE_OS_PROBER=false is configured. default value will be overwritten
+OSPROBER=0
+
+# OS distribution: 0: ubuntu and others, 1: rhel. default value will be overwritten
+OS=0
 
 devDiskUUIDPath = "/dev/disk/by-uuid"
 
@@ -24,7 +34,7 @@ if hasattr(__builtins__, 'raw_input'):
 
 def showInfo():
     print("--------------------------------------------")
-    print("GRUB Boot Menu Configuration Tool. 2021/10/13 R1")
+    print("GRUB Boot Menu Configuration Tool. 2024/5/10")
     print("Please report issues to GitHub repo at:")
     print("https://github.com/minghungchen/setboot")
     print("--------------------------------------------")
@@ -51,7 +61,12 @@ def interruptSignalHandler(sig, frame):
         if ret != 0:
              print("Failed to clean up temp directory: %s but harmless" % tmpMountPath)
     print("\n[WARN] Force interrupt detected. Please make sure GRUB is bootable before the next reboot")
-    print("Suggestion: check and restore /etc/default/grub, and run update-grub or grub-mkconfig manually")
+    if OS == 0:
+        print("Suggestion: check and restore " + defaultGrubEnvFile + ", and run update-grub or grub-mkconfig manually")
+    elif OS == 1:
+        print("Suggestion: check and restore " + defaultGrubEnvFile + ", and run grub2-mkconfig -o /boot/grub2/grub.cfg manually")        
+    else:
+        print("Suggestion: check and restore " + defaultGrubEnvFile + ", and update grub manually according to OS")
     sys.exit(1)
 
 def verifyRootPermissionAndCacheSudo():
@@ -73,10 +88,10 @@ def updateBootFile(grubBootFile, grubEnvFile):
         ret = os.system(cmd)
         if ret != 0:
             sys.exit("Failed to copy %s to %s. Please verify the %s and its backup %s are good."% (grubEnvFile,defaultGrubEnvFile,defaultGrubEnvFile,bakGrubEnvFile) )
-    cmd = "sudo grub-mkconfig -o " + grubBootFile + " > /dev/null 2>&1"
+    cmd = "sudo " + grubMkCfg + " -o " + grubBootFile + " > /dev/null 2>&1"
     ret = os.system(cmd)
     if ret != 0:
-        sys.exit("Failed to generating a temporarily grub boot file with grub-mkconfig.")
+        sys.exit("Failed to generating a temporarily grub boot file with " + grubMkCfg + ".")
     if grubEnvFile != defaultGrubEnvFile:
         cmd = "sudo rm " + defaultGrubEnvFile
         ret = os.system(cmd)
@@ -127,34 +142,63 @@ def parseBootFile(bootFile):
     grubMenu = []
     with open(bootFile, 'r') as fid:
         lines = fid.readlines()
-        while lines:
-            curMenuCount = 1
-            curEntryCount = 0
-            line = lines.pop(0)
-            if line.startswith("menuentry"):
-                # 1st level entry
-                curEntryCount+=1
-                items = line.split("'")
-                if items[1].startswith("Memory test"):
-                    print("Ignoring memory test entries...")
-                elif items[1].startswith("UEFI"):
-                    print("Ignoring UEFI Firmware entries...")
-                else:
-                    curEntry = [1, curMenuCount, curEntryCount, items[1], items[3]]
+        if OS == 0: # Ubuntu and others
+            while lines:
+                curMenuCount = 1
+                curEntryCount = 0
+                line = lines.pop(0)
+                if line.startswith("menuentry"):
+                    # 1st level entry
+                    curEntryCount+=1
+                    items = line.split("'")
+                    if items[1].startswith("Memory test"):
+                        print("Ignoring memory test entries...")
+                    elif items[1].startswith("UEFI"):
+                        print("Ignoring UEFI Firmware entries...")
+                    else:
+                        curEntry = [1, curMenuCount, curEntryCount, items[1], items[3]]
+                        grubMenu.extend(curEntry)
+                elif line.startswith("submenu"):
+                    # 1st level submenu
+                    curMenuCount+=1
+                    curEntryCount=0
+                    items = line.split("'")
+                    curEntry = [0, curMenuCount, curEntryCount, items[1], items[3]]
                     grubMenu.extend(curEntry)
-            elif line.startswith("submenu"):
-                # 1st level submenu
-                curMenuCount+=1
-                curEntryCount=0
-                items = line.split("'")
-                curEntry = [0, curMenuCount, curEntryCount, items[1], items[3]]
-                grubMenu.extend(curEntry)
-            elif line.startswith("	menuentry"):
-                # 2nd level entry
-                curEntryCount+=1
-                items = line.split("'")
-                curEntry = [2, curMenuCount, curEntryCount, items[1], items[3]]
-                grubMenu.extend(curEntry)
+                elif line.startswith("	menuentry"):
+                    # 2nd level entry
+                    curEntryCount+=1
+                    items = line.split("'")
+                    curEntry = [2, curMenuCount, curEntryCount, items[1], items[3]]
+                    grubMenu.extend(curEntry)        
+        elif OS == 1: # RHEL
+            while lines:
+                curMenuCount = 1
+                curEntryCount = 0
+                line = lines.pop(0)
+                if line.startswith("	menuentry"):
+                    curEntryCount+=1
+                    items = line.split("'")
+                    if items[1].startswith("UEFI"):
+                        print("Ignoring UEFI Firmware entries...")
+                    else:
+                        # RHEL has only one level and same name for all, so append kernel name after the items
+                        nName = items[1] + " vmlinuz"
+                        nFound = 0
+                        nlst = items[3].split("-")
+                        for n in nlst:
+                            if nFound == 1:
+                                if n != "":
+                                    nName = nName + "-" + n
+                                else:
+                                    break
+                            elif n == "/vmlinuz":
+                                nFound = 1
+                        curEntry = [1, curMenuCount, curEntryCount, nName, items[3]]
+                        grubMenu.extend(curEntry)                 
+        else:
+            print("Unable to parse " + bootFile + " for unknown OS")
+
     return grubMenu
 
 def selectMenuItem(grubMenu, curGrubPath, curGrubTimeout, curGrubTimeoutStyle, curGrubCmdLines):
@@ -293,11 +337,19 @@ def patchEnvFile(envFile, tmpEnvFile, grubPath, grubTimeout, grubTimeoutStyle, g
                     wid.write("GRUB_DEFAULT=\"%s\"\n" % grubPath)
                     wid.write("GRUB_TIMEOUT_STYLE=%s\n" % grubTimeoutStyle)
                     wid.write("GRUB_TIMEOUT=%s\n" % grubTimeout)
-                    wid.write("GRUB_CMDLINE_LINUX_DEFAULT=%s\n" % grubGrubCmdLine)
-                    for cmdLine in curGrubCmdLines:
-                        if cmdLine != grubGrubCmdLine:
-                            wid.write("#GRUB_CMDLINE_LINUX_DEFAULT=%s\n" % cmdLine)
-                    wid.write("GRUB_CMDLINE_LINUX=\n")
+                    if OS == 1:
+                        # RHEL uses only GRUB_CMDLINE_LINUX
+                        wid.write("GRUB_CMDLINE_LINUX=%s\n" % grubGrubCmdLine)
+                        for cmdLine in curGrubCmdLines:
+                            if cmdLine != grubGrubCmdLine:
+                                wid.write("#GRUB_CMDLINE_LINUX=%s\n" % cmdLine)
+                    else:
+                        # Ubuntu and others
+                        wid.write("GRUB_CMDLINE_LINUX_DEFAULT=%s\n" % grubGrubCmdLine)
+                        for cmdLine in curGrubCmdLines:
+                            if cmdLine != grubGrubCmdLine:
+                                wid.write("#GRUB_CMDLINE_LINUX_DEFAULT=%s\n" % cmdLine)
+                        wid.write("GRUB_CMDLINE_LINUX=\n")
                 elif line.startswith("GRUB_CMDLINE_LINUX_DEFAULT"):
                     continue
                 elif line.startswith("#GRUB_CMDLINE_LINUX_DEFAULT"):
@@ -390,12 +442,13 @@ def detectGrubDevice(tmpMount,grubBootFile,targetDev):
         if ret != 0:
             print("Failed to mount target device. Skip device: %s" % os.path.join(devDiskUUIDPath,uuid))
             continue
-        grubBootFile = tmpMountPath + "/grub/grub.cfg"
-        grubBootFileAlt = tmpMountPath + "/boot/grub/grub.cfg"
+
+        grubBootFile = tmpMountPath + defaultAltGrubBootFile
+        grubBootFileAlt = tmpMountPath + defaultGrubBootFile
         if os.path.isfile(grubBootFile):
-            grubUUIDBootFileMap[uuid] = "/grub/grub.cfg"
+            grubUUIDBootFileMap[uuid] = defaultAltGrubBootFile
         elif os.path.isfile(grubBootFileAlt):
-            grubUUIDBootFileMap[uuid] = "/boot/grub/grub.cfg"
+            grubUUIDBootFileMap[uuid] = defaultGrubBootFile
         cmd = "sudo umount " + tmpMountPath
         ret = os.system(cmd)
         if ret != 0:
@@ -412,7 +465,7 @@ def main(grubBootFile, grubEnvFile):
 
     # verify grub-mkconfig, findmnt, blkid
     print("Checking dependencies...")
-    cmd = "which grub-mkconfig" + " > /dev/null 2>&1"
+    cmd = "which " + grubMkCfg + " > /dev/null 2>&1"
     ret = os.system(cmd)
     if ret != 0:
         sys.exit("The required dependency grub-mkconfig was not found in the system.")
@@ -424,6 +477,16 @@ def main(grubBootFile, grubEnvFile):
     ret = os.system(cmd)
     if ret != 0:
         sys.exit("The required dependency blkid was not found in the system.")
+
+    cmd = "grep '^GRUB_DISABLE_OS_PROBER=false' " + defaultGrubEnvFile + " > /dev/null 2>&1"
+    ret = os.system(cmd)
+    if ret != 0:
+        print("[INFO] os-prober could be disabled, which may cause issues detecting alternative boot options on dual-boot environments.")
+        print("[INFO] Please consider to add 'GRUB_DISABLE_OS_PROBER=false' to " + defaultGrubEnvFile + " if you have a dual boot environment.")
+        print("[INFO] If you have security concerns on os-prober but need dual-boot, please consider to switch to EFI based boot managers.")
+        OSPROBER=0
+    else:
+        OSPROBER=1
     
     if grubBootFile.startswith('/dev/'):
         tmpMount = 1
@@ -441,8 +504,9 @@ def main(grubBootFile, grubEnvFile):
         ret = os.system(cmd)
         if ret != 0:
             sys.exit("Failed to mount target device.")
-        grubBootFile = tmpMountPath + "/grub/grub.cfg"
-        grubBootFileAlt = tmpMountPath + "/boot/grub/grub.cfg"
+
+        grubBootFile = tmpMountPath + defaultAltGrubBootFile
+        grubBootFileAlt = tmpMountPath + defaultGrubBootFile
         if not os.path.isfile(grubBootFile):
             if not os.path.isfile(grubBootFileAlt):
                 cmd = "sudo umount " + tmpMountPath
@@ -453,11 +517,11 @@ def main(grubBootFile, grubEnvFile):
                 ret = os.system(cmd)
                 if ret != 0:
                     print("Failed to clean up temp directory: %s but harmless" % tmpMountPath)
-                sys.exit("Cannot find existing /grub/grub.conf or /boot/grub/grub.conf in the target device.")
+                sys.exit("Cannot find existing " + defaultAltGrubBootFile + " or " + defaultGrubBootFile + " in the target device.")
             else:
                 grubBootFile = grubBootFileAlt
         print("Configuration will be written to device %s, target file will be %s" % (targetDev,grubBootFile) )
-        grupEnvFileAlt = tmpMountPath + "/etc/default/grub"
+        grupEnvFileAlt = tmpMountPath + defaultGrubEnvFile
         if os.path.isfile(grupEnvFileAlt):
             grubEnvFile = grupEnvFileAlt
             print("Environment file is detected on device %s, will use %s" % (targetDev,grubEnvFile) )
@@ -485,6 +549,9 @@ def main(grubBootFile, grubEnvFile):
         print("\nThe following alternative grub boot configuration files are detected:")
         for uuid,grubFileLocation in grubUUIDBootFileMap.items():
             print("%s: UUID=%s at %s" % (UUIDdevNameMap[uuid], uuid, grubFileLocation))
+        if OSPROBER == 0:
+            print("[WARN] GRUB_DISABLE_OS_PROBER=false is not set. Dual boot may not be managed by setboot and grub.")
+            print("[WARN] Please be careful updating grub configuration on other boot drives and proceed at your own risk.")
         confirm = input("Do you want to update those grub boot configuration files [Y]: ")
         if confirm.lower() == "y" or confirm == "":
             for uuid,grubFileLocation in grubUUIDBootFileMap.items():
@@ -522,12 +589,45 @@ def main(grubBootFile, grubEnvFile):
     return 0
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2:
-        if sys.argv[1].endswith(".conf") or sys.argv[1].startswith("/dev/"):
-            defaultGrubBootFile = sys.argv[1]
+    if distro.id() == "rhel":
+        OS=1
+        grubMkCfg = "grub2-mkconfig"
+        defaultGrubBootFile = "/boot/grub2/grub.cfg"
+        defaultAltGrubBootFile = "/grub2/grub.cfg"
+        defaultGrubEnvFile = "/etc/default/grub"
+        if os.getuid() != 0:
+            #print("Re-launch setboot with full root privilege for RHEL...")
+            commands = []
+            args = [sys.executable] + sys.argv
+            commands.append(["sudo"] + args)
+            for args in commands:
+                os.execlp(args[0], *args)
+            sys.exit(0)        
+    elif distro.id() == "ubuntu":
+        OS=0
+        grubMkCfg = "grub-mkconfig"
+        defaultGrubBootFile = "/boot/grub/grub.cfg"
+        defaultAltGrubBootFile = "/grub/grub.cfg"
+        defaultGrubEnvFile = "/etc/default/grub"
+    else:
+        if len(sys.argv) < 2:
+            print("OS detection result: Unrecognized OS distribution. Currently setboot only support Ubuntu and RHEL.")
+            print("If this failure is unexpected, please open an issue in GitHub and provide the following information.")
+            print("OS distro Name: " + distro.name() + " ID: " + distro.id() + " Version: " + distro.version())
+            print("If you want to continue, please specify at least one parameter when running setboot, or run with 'setboot force'.")
+            sys.exit(1)
         else:
-            defaultGrubEnvFile = sys.argv[1]
-        print("Override the default grub files: Boot: %s, Env: %s" % (defaultGrubBootFile, defaultGrubEnvFile))
+            OS=0
+            print("Unrecognized OS detected. Continue with the mechanism for Ubuntu.")
+
+    if len(sys.argv) == 2:
+        # ignore the parameter force
+        if sys.argv[1] != "force":
+            if sys.argv[1].endswith(".conf") or sys.argv[1].endswith(".cfg") or sys.argv[1].startswith("/dev/"):
+                defaultGrubBootFile = sys.argv[1]
+            else:
+                defaultGrubEnvFile = sys.argv[1]
+            print("Override the default grub files: Boot: %s, Env: %s" % (defaultGrubBootFile, defaultGrubEnvFile))
     if len(sys.argv) == 3:
         defaultGrubBootFile = sys.argv[1]
         defaultGrubEnvFile = sys.argv[2]
