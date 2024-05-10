@@ -197,7 +197,7 @@ def parseBootFile(bootFile):
                         curEntry = [1, curMenuCount, curEntryCount, nName, items[3]]
                         grubMenu.extend(curEntry)                 
         else:
-            print("Unable to parse " + bootFile + " for unknown OS")
+            print("Unable to parse " + bootFile + " for an unknown OS")
 
     return grubMenu
 
@@ -259,8 +259,10 @@ def selectMenuItem(grubMenu, curGrubPath, curGrubTimeout, curGrubTimeoutStyle, c
             grubPath=grubPaths[intVal]
             grubString=grubStrs[intVal]
             break
-    
-    print ("\nAvailable GRUB_CMDLINE_LINUX_DEFAULT settings:")
+    if OS == 1:
+        print ("\nAvailable GRUB_CMDLINE_LINUX settings:")
+    else:
+        print ("\nAvailable GRUB_CMDLINE_LINUX_DEFAULT settings:")
     cmdIndex = 0
     currItemIdex = -1
     for curCmdStr in curGrubCmdLines:
@@ -271,7 +273,10 @@ def selectMenuItem(grubMenu, curGrubPath, curGrubTimeout, curGrubTimeoutStyle, c
         else:
             print("[%d] %s" % (cmdIndex, curCmdStr.strip("\"")))
     cmdIndex+=1
-    print("[%d] Input a new GRUB_CMDLINE_LINUX_DEFAULT string" % cmdIndex)
+    if OS == 1:
+        print("[%d] Input a new GRUB_CMDLINE_LINUX string" % cmdIndex)
+    else:
+        print("[%d] Input a new GRUB_CMDLINE_LINUX_DEFAULT string" % cmdIndex)
     while True:
         if currItemIdex != -1:
             inputData = input("Please select the index of the CMDLINE string [" + str(currItemIdex) + "]: ")
@@ -546,12 +551,13 @@ def main(grubBootFile, grubEnvFile):
         sys.exit("Failed to create backup environment setting file in temporarily directory.")
     grubUUIDBootFileMap, UUIDdevNameMap = detectGrubDevice(tmpMount, grubBootFile, targetDev)
     if len(grubUUIDBootFileMap) > 0:
+        if OSPROBER == 0:
+            print("\n[WARN] GRUB_DISABLE_OS_PROBER=false is not set. Dual boot may not be managed by setboot and grub.")
+            print("[WARN] Please be careful updating grub configuration on other boot drives and proceed at your own risk.")
+        
         print("\nThe following alternative grub boot configuration files are detected:")
         for uuid,grubFileLocation in grubUUIDBootFileMap.items():
             print("%s: UUID=%s at %s" % (UUIDdevNameMap[uuid], uuid, grubFileLocation))
-        if OSPROBER == 0:
-            print("[WARN] GRUB_DISABLE_OS_PROBER=false is not set. Dual boot may not be managed by setboot and grub.")
-            print("[WARN] Please be careful updating grub configuration on other boot drives and proceed at your own risk.")
         confirm = input("Do you want to update those grub boot configuration files [Y]: ")
         if confirm.lower() == "y" or confirm == "":
             for uuid,grubFileLocation in grubUUIDBootFileMap.items():
@@ -590,6 +596,7 @@ def main(grubBootFile, grubEnvFile):
 
 if __name__ == '__main__':
     if distro.id() == "rhel":
+        print("[WARN] RHEL support is experimental. Please use at your own risk.")
         OS=1
         grubMkCfg = "grub2-mkconfig"
         defaultGrubBootFile = "/boot/grub2/grub.cfg"
@@ -610,24 +617,18 @@ if __name__ == '__main__':
         defaultAltGrubBootFile = "/grub/grub.cfg"
         defaultGrubEnvFile = "/etc/default/grub"
     else:
-        if len(sys.argv) < 2:
-            print("OS detection result: Unrecognized OS distribution. Currently setboot only support Ubuntu and RHEL.")
-            print("If this failure is unexpected, please open an issue in GitHub and provide the following information.")
-            print("OS distro Name: " + distro.name() + " ID: " + distro.id() + " Version: " + distro.version())
-            print("If you want to continue, please specify at least one parameter when running setboot, or run with 'setboot force'.")
-            sys.exit(1)
-        else:
-            OS=0
-            print("Unrecognized OS detected. Continue with the mechanism for Ubuntu.")
+        OS=0
+        print("[WARN] Unrecognized OS distribution detected. Currently setboot only officially support Ubuntu.")
+        print("[WARN] If this is unexpected, please open an issue in GitHub and provide the following information.")
+        print("=> OS distro Name: " + distro.name() + " ID: " + distro.id() + " Version: " + distro.version())
+        print("[WARN] Continue with the mechanism designed for Ubuntu.")
 
     if len(sys.argv) == 2:
-        # ignore the parameter force
-        if sys.argv[1] != "force":
-            if sys.argv[1].endswith(".conf") or sys.argv[1].endswith(".cfg") or sys.argv[1].startswith("/dev/"):
-                defaultGrubBootFile = sys.argv[1]
-            else:
-                defaultGrubEnvFile = sys.argv[1]
-            print("Override the default grub files: Boot: %s, Env: %s" % (defaultGrubBootFile, defaultGrubEnvFile))
+        if sys.argv[1].endswith(".conf") or sys.argv[1].endswith(".cfg") or sys.argv[1].startswith("/dev/"):
+            defaultGrubBootFile = sys.argv[1]
+        else:
+            defaultGrubEnvFile = sys.argv[1]
+        print("Override the default grub files: Boot: %s, Env: %s" % (defaultGrubBootFile, defaultGrubEnvFile))
     if len(sys.argv) == 3:
         defaultGrubBootFile = sys.argv[1]
         defaultGrubEnvFile = sys.argv[2]
