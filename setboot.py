@@ -101,6 +101,10 @@ def updateBootFile(grubBootFile, grubEnvFile):
         ret = os.system(cmd)
         if ret != 0:
             sys.exit("Failed to rename %s to %s. You may want to manually conduct this operation." % (bakGrubEnvFile,defaultGrubEnvFile) )
+    cmd = "sudo chmod 777 " + grubBootFile
+    ret = os.system(cmd)
+    if ret != 0:
+        sys.exit("Failed to change the permission for the temporarily grub boot file " + grubBootFile + ".")
 
 def parseEnvFile(envFile):
     curGrubCmdLines = []
